@@ -18,18 +18,18 @@ import pyodbc
 
 # Load packages.
 from revoscalepy import rx_get_var_names
-from revoscalepy.datasource import RxSqlServerData
-from revoscalepy.functions import RxSummary
-from revoscalepy.computecontext import RxInSqlServer, RxLocalSeq, RxComputeContext
-from revoscalepy.etl import RxImport, RxDataStep
+from revoscalepy import RxSqlServerData
+from revoscalepy import rx_summary
+from revoscalepy import RxInSqlServer, RxLocalSeq, rx_set_compute_context
+from revoscalepy import rx_import, rx_data_step
 
 # Load the connection string and compute context definitions.
 connection_string = "Driver=SQL Server;Server=localhost;Database=Hospital;UID=rdemo;PWD=D@tascience"
-sql = RxInSqlServer.RxInSqlServer(connection_string = connection_string)
-local = RxLocalSeq.RxLocalSeq()
+sql = RxInSqlServer(connection_string = connection_string)
+local = RxLocalSeq()
 
 # Set the Compute Context to local.
-RxComputeContext.rx_set_compute_context(local)
+rx_set_compute_context(local)
 
 ##########################################################################################################################################
 
@@ -42,7 +42,7 @@ RxComputeContext.rx_set_compute_context(local)
 
 def display_head(table_name, n_rows):
     table_sql = RxSqlServerData(sql_query = "SELECT TOP({}) * FROM {}".format(n_rows, table_name), connection_string = connection_string)
-    table = RxImport.rx_import(table_sql)
+    table = rx_import(table_sql)
     print(table)
 
 # table_name = "insert_table_name"
@@ -77,7 +77,7 @@ LengthOfStay_cleaned_sql = RxSqlServerData(table = table_name, connection_string
 # Get the mean and standard deviation of those variables.
 col_list = rx_get_var_names(LengthOfStay_cleaned_sql)
 f = "+".join(col_list)
-summary = RxSummary.rx_summary(formula = f, data = LengthOfStay_cleaned_sql, by_term = True).summary_data_frame
+summary = rx_summary(formula = f, data = LengthOfStay_cleaned_sql, by_term = True).summary_data_frame
 summary.index.name = "Name"
 summary.reset_index(inplace=True)
 
@@ -108,15 +108,16 @@ pyodbc_cursor.close()
 pyodbc_cnxn.commit()
 pyodbc_cnxn.close()
 
+# TODO: combine into one data step
 # Standardize the cleaned table by wrapping it up in rxDataStep. Output is written to LoS_standard.
 LengthOfStay_cleaned_sql = RxSqlServerData(sql_query = "SELECT * FROM [Hospital].[dbo].[{}]".format(table_name), connection_string = connection_string) # Temporary workaround
 LoS_std_sql = RxSqlServerData(table = "LoS_standard", connection_string = connection_string)
-RxDataStep.rx_data_step(input_data = LengthOfStay_cleaned_sql, output_file = LoS_std_sql, overwrite = True, transform_function = standardize)
+rx_data_step(input_data = LengthOfStay_cleaned_sql, output_file = LoS_std_sql, overwrite = True, transform_function = standardize)
 
 # We create a new column number_of_issues as the number of preidentified medical conditions. Output is written to LoS.
 LoS_std_sql = RxSqlServerData(sql_query = "SELECT * FROM [Hospital].[dbo].[LoS_standard]", connection_string = connection_string) # Temporary workaround
 LoS_sql = RxSqlServerData(table = "LoS", connection_string = connection_string)
-RxDataStep.rx_data_step(input_data = LoS_std_sql, output_file = LoS_sql, overwrite = True, transform_function = calculate_number_of_issues)
+rx_data_step(input_data = LoS_std_sql, output_file = LoS_sql, overwrite = True, transform_function = calculate_number_of_issues)
 
 # Converting number_of_issues to character with a SQL query because as.character in rxDataStep is crashing.
 pyodbc_cnxn = pyodbc.connect(connection_string)

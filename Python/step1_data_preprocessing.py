@@ -20,19 +20,15 @@ import pyodbc
 from pandas import DataFrame, isnull
 from numpy import where
 
-from revoscalepy import rx_get_var_names
-from revoscalepy.datasource import RxSqlServerData, RxTextData
-from revoscalepy.computecontext import RxInSqlServer, RxLocalSeq, RxComputeContext
-from revoscalepy.etl import RxImport, RxDataStep
-from revoscalepy.functions import RxSummary
+from revoscalepy import rx_get_var_names, RxSqlServerData, RxTextData, RxInSqlServer, RxLocalSeq, rx_set_compute_context, rx_import, rx_data_step, rx_summary
 
 # Load the connection string and compute context definitions.
 connection_string = "Driver=SQL Server;Server=localhost;Database=Hospital;UID=rdemo;PWD=D@tascience"
-sql = RxInSqlServer.RxInSqlServer(connection_string = connection_string)
-local = RxLocalSeq.RxLocalSeq()
+sql = RxInSqlServer(connection_string = connection_string)
+local = RxLocalSeq()
 
 # Set the Compute Context to local.
-RxComputeContext.rx_set_compute_context(local)
+rx_set_compute_context(local)
 
 ##########################################################################################################################################
 
@@ -46,7 +42,7 @@ RxComputeContext.rx_set_compute_context(local)
 
 def display_head(table_name, n_rows):
     table_sql = RxSqlServerData(sql_query = "SELECT TOP({}}) * FROM {}}".format(n_rows, table_name), connection_string = connection_string)
-    table = RxImport.rx_import(table_sql)
+    table = rx_import(table_sql)
     print(table)
 
 # table_name = "insert_table_name"
@@ -97,7 +93,7 @@ LoS_text = RxTextData(file = os.path.join(file_path, "LengthOfStay.csv"), column
 
 # Upload the table to SQL.
 LengthOfStay_sql = RxSqlServerData(table = "LengthOfStay", connection_string = connection_string)
-RxDataStep.rx_data_step(input_data = LoS_text, output_file = LengthOfStay_sql, overwrite = True)
+rx_data_step(input_data = LoS_text, output_file = LengthOfStay_sql, overwrite = True)
 
 ##########################################################################################################################################
 
@@ -115,7 +111,7 @@ colnames = rx_get_var_names(LengthOfStay_sql2)
 # Then, get the names of the variables that actually have missing values. Assumption: no NA in eid, lengthofstay, or dates.
 var = [x for x in colnames if x not in ["eid", "lengthofstay", "vdate", "discharged"]]
 f = "+".join(var)
-summary = RxSummary.rx_summary(formula = f, data = LengthOfStay_sql2, by_term = True).summary_data_frame
+summary = rx_summary(formula = f, data = LengthOfStay_sql2, by_term = True).summary_data_frame
 summary.index.name = "Name"
 summary.reset_index(inplace=True)
 
@@ -178,7 +174,7 @@ if method == "missing":
     pyodbc_cnxn.close()
 
     LoS0_sql = RxSqlServerData(table = "LoS0", connection_string = connection_string)
-    RxDataStep.rx_data_step(input_data = LengthOfStay_sql, output_file = LoS0_sql, overwrite = True, transform_function = fill_NA_explicit)
+    rx_data_step(input_data = LengthOfStay_sql, output_file = LoS0_sql, overwrite = True, transform_function = fill_NA_explicit)
 
 # ##########################################################################################################################################
 
@@ -217,5 +213,5 @@ if method == "mean_mode":
     pyodbc_cnxn.close()
 
     LoS0_sql = RxSqlServerData(table = "LoS0", connection_string = connection_string)
-    RxDataStep.rx_data_step(input_data = LengthOfStay_sql, output_file = LoS0_sql, overwrite = True, transform_function = fill_NA_mode_mean)
+    rx_data_step(input_data = LengthOfStay_sql, output_file = LoS0_sql, overwrite = True, transform_function = fill_NA_mode_mean)
 
