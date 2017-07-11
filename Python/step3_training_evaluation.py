@@ -21,10 +21,10 @@ from pandas import Series
 import pyodbc
 
 from revoscalepy import rx_dforest, rx_btrees, rx_predict, RxOdbcData, rx_get_var_info, RxSqlServerData, rx_get_var_names
-from revoscalepy import RxInSqlServer, RxLocalSeq, rx_set_compute_context, rx_write_object, rx_serialize_model, rx_import
+from revoscalepy import RxInSqlServer, RxLocalSeq, rx_set_compute_context, rx_write_object, rx_serialize_model, rx_import, rx_data_step
 
-#from microsoftml import rx_fast_forest
-#from microsoftml import rx_predict as ml_predict
+from microsoftml import rx_fast_trees, rx_neural_network, adadelta_optimizer
+from microsoftml import rx_predict as ml_predict
 
 # Load the connection string and compute context definitions.
 connection_string = "Driver=SQL Server;Server=localhost;Database=Hospital;UID=rdemo;PWD=D@tascience"
@@ -111,10 +111,10 @@ pyodbc_cnxn.close()
 variables_all = rx_get_var_names(LoS)
 variables_to_remove = ["eid", "vdate", "discharged", "facid"]
 training_variables = [x for x in variables_all if x not in variables_to_remove]
-LoS_Train = RxSqlServerData(sql_query = "SELECT {} FROM LoS WHERE eid IN (SELECT eid from Train_Id)".format(', '.join(training_variables)), connection_string = connection_string, column_info = column_info)
+LoS_Train = RxSqlServerData(sql_query = "SELECT eid, {} FROM LoS WHERE eid IN (SELECT eid from Train_Id)".format(', '.join(training_variables)), connection_string = connection_string, column_info = column_info)
 
 ## Point to the testing set. It will be created on the fly when testing models.
-LoS_Test = RxSqlServerData(sql_query = "SELECT {} FROM LoS WHERE eid NOT IN (SELECT eid from Train_Id)".format(', '.join(training_variables)), connection_string = connection_string, column_info = column_info)
+LoS_Test = RxSqlServerData(sql_query = "SELECT eid, {} FROM LoS WHERE eid NOT IN (SELECT eid from Train_Id)".format(', '.join(training_variables)), connection_string = connection_string, column_info = column_info)
 
 ##########################################################################################################################################
 
@@ -157,7 +157,7 @@ def tune_rx_btrees(formula, data, n_tree_list, lr_list, min_split_list):
 
 def tune_rx_dforest(formula, data, n_tree_list, min_split_list, cp_list):
     print("Tuning rx_dforest")
-    best_error = 1.0
+    best_error = 1000000000.0
     best_model = None
     for nt in n_tree_list:
         for ms in min_split_list:
@@ -182,17 +182,18 @@ def tune_rx_dforest(formula, data, n_tree_list, min_split_list, cp_list):
 
 ##########################################################################################################################################
 
+RTS_odbc = RxOdbcData(connection_string, table = "RTS")
+
 # Set the compute context to SQL for model training.
 rx_set_compute_context(sql)
 
-# Train the Random Forest.
-forest_model = tune_rx_dforest(formula, LoS_Train, n_tree_list = [32], min_split_list = [15], cp_list = [0])
+# Tune the Random Forest. This tunes on the basis of minimizing oob error.
+forest_model = tune_rx_dforest(formula, LoS_Train, n_tree_list = [8], min_split_list = [15], cp_list = [0])    # 32
 
 # Save the Random Forest in SQL. The compute context is set to local in order to export the model.
 rx_set_compute_context(local)
 
 # RxSerialize for Real Time Scoring
-RTS_odbc = RxOdbcData(connection_string, table = "RTS")
 serialized_model = rx_serialize_model(forest_model, realtime_scoring_only = True)
 
 rx_write_object(RTS_odbc, key = "forest", value = serialized_model, serialize = False, compress = None, overwrite = True)
@@ -206,8 +207,8 @@ rx_write_object(RTS_odbc, key = "forest", value = serialized_model, serialize = 
 # Set the compute context to SQL for model training.
 rx_set_compute_context(sql)
 
-# Train the Boosted Trees model.
-boosted_model = tune_rx_btrees(formula, LoS_Train, n_tree_list = [32], lr_list = [0.3, 0.4], min_split_list = [20])
+# Train the Boosted Trees model. This tunes on the basis of minimizing oob error.
+boosted_model = tune_rx_btrees(formula, LoS_Train, n_tree_list = [32], lr_list = [0.3], min_split_list = [20])
 
 # Save the Boosted Trees in SQL. The compute context is set to Local in order to export the model.
 rx_set_compute_context(local)
@@ -222,26 +223,51 @@ rx_write_object(RTS_odbc, key = "boosted", value = serialized_model, serialize =
 
 ##########################################################################################################################################
 
-# # Set the compute context to SQL for model training.
-# RxComputeContext.rx_set_compute_context(sql)
-#
-# # Train the Fast Trees model.
-# print("Training Fast Trees")
-# fast_model = rx_fast_trees(formula = formula,
-#                      data = LoS_Train,
-#                      num_trees = 40,
-#                      method = "regression",
-#                      learning_rate = 0.2,
-#                      split_fraction = 5/24,
-#                      feature_fraction = 1,
-#                      min_split = 10)
-# #
-# # # Save the Boosted Trees in SQL. The compute context is set to Local in order to export the model.
-# rx_set_compute_context(local)
-#
-# fast_model_raw = dill.dumps(fast_model)
-# Fast_odbc = RxOdbcData(connection_string, table = "SavedModels")
-# status = rx_write_object(Fast_odbc, key = "boosted", value = fast_model_raw, serialize = False, compress = None, overwrite=False)
+# Set the compute context to SQL for model training.
+rx_set_compute_context(sql)
+
+# Train the Fast Trees model.
+print("Training Fast Trees")
+fast_model = rx_fast_trees(formula=formula,
+                          data=LoS_Train,
+                          num_trees=32,
+                          method="regression",
+                          learning_rate=0.2,
+                          split_fraction=5/24,
+                          min_split=10)
+
+# Save the Fast Trees in SQL. The compute context is set to Local in order to export the model.
+rx_set_compute_context(local)
+
+serialized_model = rx_serialize_model(fast_model, realtime_scoring_only = True)
+
+rx_write_object(RTS_odbc, key = "fast", value = serialized_model, serialize = False, compress = None, overwrite = True)
+
+##########################################################################################################################################
+
+##	Neural Network (rx_neural_network implementation) Training and saving the model to SQL
+
+##########################################################################################################################################
+
+# Set the compute context to SQL for model training.
+rx_set_compute_context(sql)
+
+# Train the Fast Trees model.
+print("Training Neural Network")
+NN_model = rx_neural_network(formula=formula,
+                            data=LoS_Train,
+                            method = "regression",
+                            num_hidden_nodes = 128,
+                            num_iterations = 5, # 100
+                            optimizer = adadelta_optimizer(),
+                            mini_batch_size = 20)
+
+# Save the Neural Network in SQL. The compute context is set to Local in order to export the model.
+rx_set_compute_context(local)
+
+serialized_model = rx_serialize_model(NN_model, realtime_scoring_only = True)
+
+rx_write_object(RTS_odbc, key = "NN", value = serialized_model, serialize = False, compress = None, overwrite = True)
 
 ##########################################################################################################################################
 
@@ -278,7 +304,7 @@ def evaluate_model(observed, predicted, model):
 
 ##########################################################################################################################################
 
-# Make Predictions, then import them into R.
+# Make Predictions, then import them into Python.
 forest_prediction_sql = RxSqlServerData(table = "Forest_Prediction", strings_as_factors = True, connection_string = connection_string)
 rx_predict(forest_model, data = LoS_Test, output_data = forest_prediction_sql, type = "response", extra_vars_to_write = ["lengthofstay", "eid"], overwrite = True)
 
@@ -292,7 +318,7 @@ forest_metrics = evaluate_model(observed = forest_prediction['lengthofstay'], pr
 
 ##########################################################################################################################################
 
-# Make Predictions, then import them into R.
+# Make Predictions, then import them into Python.
 boosted_prediction_sql = RxSqlServerData(table = "Boosted_Prediction", strings_as_factors = True, connection_string = connection_string)
 rx_predict(boosted_model, data = LoS_Test, output_data = boosted_prediction_sql, extra_vars_to_write = ["lengthofstay", "eid"], overwrite = True)
 
@@ -306,10 +332,26 @@ boosted_metrics = evaluate_model(observed = boosted_prediction['lengthofstay'], 
 
 ##########################################################################################################################################
 
-# # Make Predictions, then import them into R.
-# fast_prediction_sql = RxSqlServerData(table = "Fast_Prediction", strings_as_factors = True, connection_string = connection_string)
-# ml_predict(fast_model, data = LoS_Test, output_data = fast_prediction_sql, extra_vars_to_write = ["lengthofstay", "eid"], overwrite = True)
-#
-# # Compute the performance metrics of the model.
-# fast_prediction = rx_import_datasource(input_data = fast_prediction_sql)
-# fast_metrics = evaluate_model(observed = fast_prediction['lengthofstay'], predicted = fast_prediction['lengthofstay_Pred'], model = "FT")
+# Make Predictions, then write them to a table.
+LoS_Test_import = rx_import(input_data = LoS_Test)
+fast_prediction = ml_predict(fast_model, data = LoS_Test_import, extra_vars_to_write = ["lengthofstay", "eid"], overwrite = True)
+fast_prediction_sql = RxSqlServerData(table = "Fast_Prediction", strings_as_factors = True, connection_string = connection_string)
+rx_data_step(input_data=fast_prediction, output_file=fast_prediction_sql, overwrite=True)
+
+
+# Compute the performance metrics of the model.
+fast_metrics = evaluate_model(observed = fast_prediction['lengthofstay'], predicted = fast_prediction['Score'], model = "FT")
+
+##########################################################################################################################################
+
+##	Neural Networks Scoring
+
+##########################################################################################################################################
+
+# Make Predictions, then write them to a table.
+NN_prediction = ml_predict(NN_model, data = LoS_Test_import, extra_vars_to_write = ["lengthofstay", "eid"], overwrite = True)
+NN_prediction_sql = RxSqlServerData(table = "NN_Prediction", strings_as_factors = True, connection_string = connection_string)
+rx_data_step(input_data=NN_prediction, output_file=NN_prediction_sql, overwrite=True)
+
+# Compute the performance metrics of the model.
+NN_metrics = evaluate_model(observed = NN_prediction['lengthofstay'], predicted = NN_prediction['Score'], model = "NN")
